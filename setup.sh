@@ -240,7 +240,7 @@ sysctl -p
 
 
 # Add a route for the local subnet so that traffic destined for ${LOCAL_SUBNET} is routed via ${LOCAL_IFACE}
-ip route add ${LOCAL_SUBNET} dev ${LOCAL_IFACE}
+ip route replace ${LOCAL_SUBNET} dev ${LOCAL_IFACE}
 
 echo "config setup
   strictcrlpolicy=yes
@@ -262,7 +262,7 @@ conn roadwarrior
   dpdaction=clear
   dpddelay=900s
   rekey=no
-  left=%any
+  left=${IP}
   leftid=@${VPNHOST}
   leftcert=cert.pem
   leftsendcert=always

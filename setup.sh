@@ -161,7 +161,7 @@ iptables -A FORWARD -s "${LOCAL_SUBNET}" -d "${VPNIPPOOL}" -j ACCEPT
 iptables -t mangle -A FORWARD --match policy --pol ipsec --dir in -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -p tcp -m tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1361:1536 -j TCPMSS --set-mss 1360
 
 # Exclude VPN client traffic destined for ${LOCAL_SUBNET} from NAT by accepting it on ${LOCAL_IFACE}
-iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -d "${LOCAL_SUBNET}" -o ${LOCAL_IFACE} -j ACCEPT
+iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -d "${LOCAL_SUBNET}" -o "${LOCAL_IFACE}" -j MASQUERADE
 
 # masquerade VPN traffic over eth0 etc.
 iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -m policy --pol ipsec --dir out -j ACCEPT  # exempt IPsec traffic from masquerading

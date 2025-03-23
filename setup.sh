@@ -62,6 +62,13 @@ if [[ "${IP}" != "${VPNHOSTIP}" ]]; then
   read -r -p "Press [Return] to continue anyway, or Ctrl-C to abort"
 fi
 
+read -r -p "Enter the name of the local interface for accessing the internal network (default: eth1): " LOCAL_IFACE
+LOCAL_IFACE=${LOCAL_IFACE:-'eth1'}
+
+read -r -p "Enter the local subnet (e.g., 192.168.0.0/24): " LOCAL_SUBNET
+
+read -r -p "Enter the IP address of the local DNS server for VPN clients: " LOCALDNS
+
 read -r -p "VPN username: " VPNUSERNAME
 while true; do
   read -r -s -p "VPN password (no quotes, please): " VPNPASSWORD
@@ -72,26 +79,6 @@ while true; do
   echo "Passwords didn't match -- please try again"
 done
 
-echo '
-Public DNS servers include:
-
-176.103.130.130,176.103.130.131  AdGuard               https://adguard.com/en/adguard-dns/overview.html
-176.103.130.132,176.103.130.134  AdGuard Family        https://adguard.com/en/adguard-dns/overview.html
-1.1.1.1,1.0.0.1                  Cloudflare/APNIC      https://1.1.1.1
-84.200.69.80,84.200.70.40        DNS.WATCH             https://dns.watch
-8.8.8.8,8.8.4.4                  Google                https://developers.google.com/speed/public-dns/
-208.67.222.222,208.67.220.220    OpenDNS               https://www.opendns.com
-208.67.222.123,208.67.220.123    OpenDNS FamilyShield  https://www.opendns.com
-9.9.9.9,149.112.112.112          Quad9                 https://quad9.net
-77.88.8.8,77.88.8.1              Yandex                https://dns.yandex.com
-77.88.8.88,77.88.8.2             Yandex Safe           https://dns.yandex.com
-77.88.8.7,77.88.8.3              Yandex Family         https://dns.yandex.com
-'
-
-read -r -p "DNS servers for VPN users (default: 1.1.1.1,1.0.0.1): " VPNDNS
-VPNDNS=${VPNDNS:-'1.1.1.1,1.0.0.1'}
-
-
 echo
 echo "--- Configuration: general server settings ---"
 echo
@@ -101,33 +88,7 @@ TZONE=${TZONE:-'Europe/London'}
 
 read -r -p "Email address for sysadmin (e.g. j.bloggs@example.com): " EMAILADDR
 
-read -r -p "Desired SSH log-in port (default: 22): " SSHPORT
-SSHPORT=${SSHPORT:-22}
-
-read -r -p "New SSH log-in user name: " LOGINUSERNAME
-
-CERTLOGIN="n"
-if [[ -s /root/.ssh/authorized_keys ]]; then
-  while true; do
-    read -r -p "Copy /root/.ssh/authorized_keys to new user and disable SSH password log-in [Y/n]? " CERTLOGIN
-    [[ ${CERTLOGIN,,} =~ ^(y(es)?)?$ ]] && CERTLOGIN=y
-    [[ ${CERTLOGIN,,} =~ ^no?$ ]] && CERTLOGIN=n
-    [[ $CERTLOGIN =~ ^(y|n)$ ]] && break
-  done
-fi
-
-while true; do
-  [[ ${CERTLOGIN} = "y" ]] && read -r -s -p "New SSH user's password (e.g. for sudo): " LOGINPASSWORD
-  [[ ${CERTLOGIN} != "y" ]] && read -r -s -p "New SSH user's log-in password (must be REALLY STRONG): " LOGINPASSWORD
-  echo
-  read -r -s -p "Confirm new SSH user's password: " LOGINPASSWORD2
-  echo
-  [[ "${LOGINPASSWORD}" = "${LOGINPASSWORD2}" ]] && break
-  echo "Passwords didn't match -- please try again"
-done
-
 VPNIPPOOL="10.101.0.0/16"
-
 
 echo
 echo "--- Upgrading and installing packages ---"
@@ -193,8 +154,17 @@ iptables -A INPUT -p udp --dport 4500 -j ACCEPT
 iptables -A FORWARD --match policy --pol ipsec --dir in  --proto esp -s "${VPNIPPOOL}" -j ACCEPT
 iptables -A FORWARD --match policy --pol ipsec --dir out --proto esp -d "${VPNIPPOOL}" -j ACCEPT
 
+# Allow traffic from VPN clients (${VPNIPPOOL}) to access the local subnet (${LOCAL_SUBNET})
+iptables -A FORWARD -s "${VPNIPPOOL}" -d "${LOCAL_SUBNET}" -j ACCEPT
+
+# Allow traffic from the local subnet (${LOCAL_SUBNET}) to access VPN clients (${VPNIPPOOL})
+iptables -A FORWARD -s "${LOCAL_SUBNET}" -d "${VPNIPPOOL}" -j ACCEPT
+
 # reduce MTU/MSS values for dumb VPN clients
 iptables -t mangle -A FORWARD --match policy --pol ipsec --dir in -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -p tcp -m tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1361:1536 -j TCPMSS --set-mss 1360
+
+# Exclude VPN client traffic destined for ${LOCAL_SUBNET} from NAT by accepting it on ${LOCAL_IFACE}
+iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -d "${LOCAL_SUBNET}" -o ${LOCAL_IFACE} -j ACCEPT
 
 # masquerade VPN traffic over eth0 etc.
 iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -m policy --pol ipsec --dir out -j ACCEPT  # exempt IPsec traffic from masquerading
@@ -272,6 +242,9 @@ net.ipv6.conf.${ETH0ORSIMILAR}.disable_ipv6 = 1
 sysctl -p
 
 
+# Add a route for the local subnet so that traffic destined for ${LOCAL_SUBNET} is routed via ${LOCAL_IFACE}
+ip route add ${LOCAL_SUBNET} dev ${LOCAL_IFACE}
+
 echo "config setup
   strictcrlpolicy=yes
   uniqueids=never
@@ -296,12 +269,12 @@ conn roadwarrior
   leftid=@${VPNHOST}
   leftcert=cert.pem
   leftsendcert=always
-  leftsubnet=0.0.0.0/0
+  leftsubnet=${LOCAL_SUBNET}
   right=%any
   rightid=%any
   rightauth=eap-mschapv2
   eap_identity=%any
-  rightdns=${VPNDNS}
+  rightdns=${LOCALDNS}
   rightsourceip=${VPNIPPOOL}
   rightsendcert=never
 " > /etc/ipsec.conf
